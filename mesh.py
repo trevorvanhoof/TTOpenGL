@@ -160,3 +160,49 @@ class IndexedMesh(Mesh):
             ibo = None
         super().__init__(attributeLayout, vbo, ibo, mode, indexType)
 
+
+def loadBinaryMesh(path):
+    """
+    See maya_mesh for the file format specification.
+    """
+
+    def u32(fh):
+        return struct.unpack('<I', fh.read(4))[0]
+
+    meshesByLayout = {}
+    with open(path, 'rb') as fh:
+        assert fh.read(4) == b'MSH\0', f'Unsupported file format for file "{path}".'
+        fh.read(4)
+        meshCount = u32(fh)
+        for meshIndex in range(meshCount):
+            nameLength = u32(fh)
+            name = fh.read(nameLength).decode('utf8')
+            materialNameLength = u32(fh)
+            materialName = fh.read(materialNameLength).decode('utf8')
+            attributeCount = u32(fh)
+            attributeLayout = []
+            key = []
+            for attributeIndex in range(attributeCount):
+                semanticId = u32(fh)
+                numFloats = u32(fh)
+                key.append((semanticId, numFloats))
+                attributeLayout.append(VertexAttribute(VertexAttribute.Semantic(semanticId),
+                                                       VertexAttribute.Size(numFloats),
+                                                       VertexAttribute.Type.Float))
+            key = tuple(key)
+            numFloats = u32(fh)
+            numInts = u32(fh)
+            vboBlob = fh.read(numFloats * ctypes.sizeof(ctypes.c_float))
+            sizeof_uint = ctypes.sizeof(ctypes.c_uint)
+            iboBlob = fh.read(numInts * sizeof_uint)
+            if key not in meshesByLayout:
+                meshesByLayout[key] = attributeLayout, vboBlob, iboBlob
+            else:
+                prevLayout, prevVboBlob, prevIboBlob = meshesByLayout[key]
+                indexData = (ctypes.c_uint * numInts)()
+                ctypes.memmove(ctypes.pointer(indexData), iboBlob, ctypes.sizeof(indexData))
+                offset = len(prevIboBlob) // sizeof_uint
+                for j in range(numInts):
+                    indexData[j] += offset
+                meshesByLayout[key] = prevLayout, prevVboBlob + vboBlob, prevIboBlob + iboBlob
+    return tuple(IndexedMesh(*args) for args in meshesByLayout.values())
