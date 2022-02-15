@@ -56,10 +56,10 @@ class CameraEventFilter(QObject):
     def updateCamera(self):
         matrix = Mat44.rotate(self.angles[0], self.angles[1], 0.0, ERotateOrder.XYZ)
         matrix.cols[3] = matrix.cols[2] * Float4(self.distance) + self.pivot
-        tmp = self.camera.blockSignals(True)
+        tmp = self.camera.changed.blockSignals(True)
         self.camera.translate = matrix.col3
         self.camera.rotate = self.angles
-        self.camera.blockSignals(tmp)
+        self.camera.changed.blockSignals(tmp)
         self.camera.changed.emit()
 
     def eventFilter(self, obj, event):
@@ -153,12 +153,12 @@ class CameraEventFilter(QObject):
             self.setCameraRotation(r)
             update = False
 
-        fovSpeed = [30.0, 100.0, 10.0][self.keys[None] % 3]
-        fl = 0.0
-        fl -= self.keys[Qt.Key_PageUp] * deltaTime * fovSpeed
-        fl += self.keys[Qt.Key_PageDown] * deltaTime * fovSpeed
-        if fl:
-            self.camera.focalLength = max(0.1, self.camera.focalLength + fl)
+        #fovSpeed = [30.0, 100.0, 10.0][self.keys[None] % 3]
+        #fl = 0.0
+        #fl -= self.keys[Qt.Key_PageUp] * deltaTime * fovSpeed
+        #fl += self.keys[Qt.Key_PageDown] * deltaTime * fovSpeed
+        #if fl:
+        #    self.camera.focalLength = max(0.1, self.camera.focalLength + fl)
 
         if update:
             self.updateCamera()

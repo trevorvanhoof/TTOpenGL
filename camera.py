@@ -1,32 +1,43 @@
-from PySide6.QtCore import *
-from MMath.mmath import Vec3, Mat44, ERotateOrder
 import math
+from MMath.mmath import Vec3, Mat44, ERotateOrder
+from .core import TSignal
 
 
-def angleOfView(focalLength, filmWidth: float = 35):  # https://forums.cgsociety.org/t/mel-angle-of-view/1572220
-    radians = 2.0 * math.atan(float(filmWidth) / (2.0 * float(focalLength)))
-    # print('Camera angle of view: ', math.degrees(radians))
-    return radians
-
-
-class Camera(QObject):
-    changed = Signal()
-
+class Camera:
     def __init__(self):
         super().__init__()
+        self.changed = TSignal()
         self._translate = Vec3()
         self._rotate = Vec3()  # in radians
-        self._focalLength = 41.509
+        self._horizontalFieldOfViewDegrees = 72.0
         self.near = 0.1
         self.far = 100000.0
 
     @property
-    def focalLength(self):
-        return self._focalLength
+    def near(self):
+        return self._near
 
-    @focalLength.setter
-    def focalLength(self, value):
-        self._focalLength = value
+    @property
+    def far(self):
+        return self._far
+
+    @near.setter
+    def near(self, value):
+        self._near = value
+        self.changed.emit()
+
+    @far.setter
+    def far(self, value):
+        self._far = value
+        self.changed.emit()
+
+    @property
+    def horizontalFieldOfViewDegrees(self):
+        return self._horizontalFieldOfViewDegrees
+
+    @horizontalFieldOfViewDegrees.setter
+    def horizontalFieldOfViewDegrees(self, value):
+        self._horizontalFieldOfViewDegrees = value
         self.changed.emit()
 
     @property
@@ -48,12 +59,16 @@ class Camera(QObject):
         self.changed.emit()
 
     def projectionMatrix(self, aspectRatio):
-        hFovRad = angleOfView(self.focalLength, 42.666)
+        hFovRad = math.radians(self._horizontalFieldOfViewDegrees)
         return Mat44.perspectiveX(hFovRad, aspectRatio, self.near, self.far)
 
     def cameraMatrix(self):
         t = self.translate
         r = self.rotate
         C = Mat44.translateRotate2(t, r, ERotateOrder.XYZ)
-        C *= Mat44.rotateX(math.radians(90.0))
         return C
+
+
+class ZUpCamera(Camera):
+    def cameraMatrix(self):
+        return super().cameraMatrix() * Mat44.rotateX(math.radians(90.0))
