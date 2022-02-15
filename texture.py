@@ -149,7 +149,7 @@ class Texture2DFileDescription(TextureDescriptionBase):
         self.filePath: str = filePath
 
     def validate(self):
-        assert os.path.exists(self.filePath)
+        assert os.path.exists(self.filePath), self.filePath
         # We may lift this restriction for certain file types later
         assert self.channels in (
             Channels.RGB, Channels.RGBA, Channels.RGB_I, Channels.RGBA_I, Channels.RGB_UI, Channels.RGBA_UI)
@@ -281,6 +281,8 @@ def _numMipLevels(*size: int) -> int:
 def _texImage2D(target: int, internalFormat: int, width: int, height: int, channels: int, dataFormat: int,
                 data: Optional[bytes], resizable: bool):
     if resizable:
+        if dataFormat == GL_HALF_FLOAT:
+            dataFormat = GL_FLOAT
         glTexImage2D(target, 0, internalFormat, width, height, 0, channels, dataFormat, data)
     else:
         glTexStorage2D(target, 1, internalFormat, width, height)
