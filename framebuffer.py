@@ -19,6 +19,8 @@ class RenderTarget(GLObject):
         assert self._resizable
         if width == self._width and height == self._height:
             return
+        self._width = width
+        self._height = height
         for texture in self._textures:
             texture.resize(width, height)
 
@@ -38,6 +40,24 @@ class RenderTarget(GLObject):
         self.bind()
         yield
         self.unbind(screenBackbufferHandle, screenWidth, screenHeight)
+
+    def replace(self, colorBufferIndex, texture: Texture):
+        glBindFramebuffer(GL_FRAMEBUFFER, self._handle)
+
+        if colorBufferIndex == -1:
+            assert texture.channels == Channels.Depth
+            assert self._depthTextureId != -1
+            self._textures[self._depthTextureId] = texture
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, texture.glEnum, texture.handle, 0)
+            return
+
+        assert texture.channels != Channels.Depth
+        index = colorBufferIndex
+        if self._depthTextureId != -1 and index >= self._depthTextureId:
+            index += 1
+        assert 0 <= index < len(self._textures), index
+        self._textures[index] = texture
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + colorBufferIndex, texture.glEnum, texture.handle, 0)
 
     def attach(self, texture: Texture):
         assert texture.resizable == self._resizable
@@ -59,8 +79,7 @@ class RenderTarget(GLObject):
         return self._textures[self._depthTextureId]
 
     def colorBuffer(self, index: int) -> Optional[Texture]:
-        if self._depthTextureId != -1:
-            if index >= self._depthTextureId:
-                index += 1
+        if self._depthTextureId != -1 and index >= self._depthTextureId:
+            index += 1
         assert 0 <= index < len(self._textures)
         return self._textures[index]
