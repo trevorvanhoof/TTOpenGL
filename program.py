@@ -101,7 +101,13 @@ def _compileProgram(ioPaths: List[str], *paths: str) -> int:
 
     stages = [_compileStage(path, ioPaths) for path in paths]
 
-    program = shaders.compileProgram(*stages)
+    try:
+        program = shaders.compileProgram(*stages)
+    except shaders.ShaderValidationError:
+        for stage in stages:
+            print(glGetShaderInfoLog(stage))
+        raise
+
     _programs[paths] = program
 
     # delete the program from the cache if any of its dependent files change
