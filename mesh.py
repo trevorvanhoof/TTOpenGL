@@ -1,22 +1,46 @@
+import struct
+import enum
 from typing import *
 from OpenGL.GL import *
-from core import GLObject
+from .core import GLObject
 
 
-class VertexAttributeSemantic:
-    POSITION = 0
-    NORMAL = 1
-    TANGENT = 2
-    TEXCOORD0 = 3
-    TEXCOORD1 = 4
-    TEXCOORD2 = 5
-    TEXCOORD3 = 6
-    TEXCOORD4 = 7
-    TEXCOORD5 = 8
-    TEXCOORD6 = 9
-    TEXCOORD7 = 10
-    COLOR0 = 11
-    # COLOR# = COLOR0 + i
+class VertexAttribute:
+    class Semantic(enum.Enum):
+        POSITION = 0
+        NORMAL = 1
+        TANGENT = 2
+        TEXCOORD0 = 3
+        TEXCOORD1 = 4
+        TEXCOORD2 = 5
+        TEXCOORD3 = 6
+        TEXCOORD4 = 7
+        TEXCOORD5 = 8
+        TEXCOORD6 = 9
+        TEXCOORD7 = 10
+        BLENDINDICES = 11
+        BLENDWEIGHT = 12
+        COLOR0 = 13
+        # COLOR# = COLOR0 + i
+
+    class Size(enum.Enum):
+        Single = 1
+        Vec2 = 2
+        Vec3 = 3
+        Vec4 = 4
+
+    class Type(enum.Enum):
+        Float = GL_FLOAT
+
+    def __init__(self, semantic, size, type):
+        if isinstance(semantic, str):
+            semantic = getattr(VertexAttribute.Semantic, semantic)
+        self.semantic: Semantic = VertexAttribute.Semantic(semantic)
+        self.size: Size = VertexAttribute.Size(size)
+        self.type: Type = VertexAttribute.Type(type)
+
+    def sizeInBytes(self):
+        return {VertexAttribute.Type.Float: 4}[self.type] * self.size.value
 
 
 class Buffer(GLObject):
@@ -60,25 +84,39 @@ class Buffer(GLObject):
         glBindBuffer(target, 0)
 
 
-class MeshBase(object):
-    def __init__(self, attributeLayout, drawCount, vertexBuffer, indexBuffer=None):
-        self._vertexBuffer = vertexBuffer
-        self._indexBuffer = indexBuffer
+class Mesh(object):
+    def __init__(self,
+                 attributeLayout: Iterable[VertexAttribute],
+                 vertexBuffer: Buffer,
+                 indexBuffer: Optional[Buffer] = None,
+                 mode: int = GL_TRIANGLES,
+                 indexType: int = GL_UNSIGNED_INT):
+        self._vertexBuffer: Buffer = vertexBuffer
+        self._indexBuffer: Optional[Buffer] = indexBuffer
+
+        self._mode: int = mode
+        self._indexType: int = indexType
+        self._stride = sum(va.sizeInBytes() for va in attributeLayout)
 
         # initialize the VAO
-        self._handle = glGenVertexArrays(1)
+        self._handle: int = glGenVertexArrays(1)
         glBindVertexArray(self._handle)
         vertexBuffer.bind(GL_ARRAY_BUFFER)
         if indexBuffer is not None:
             indexBuffer.bind(GL_ELEMENT_ARRAY_BUFFER)
 
+            sz = {GL_UNSIGNED_BYTE: 1, GL_UNSIGNED_SHORT: 2, GL_UNSIGNED_INT: 4}[self._indexType]
+            self._count: int = self._indexBuffer.size // sz
+        else:
+            self._count: int = self._vertexBuffer.size // self._stride
+
         # initialize the attribute bindings
-        stride = 4 * sum(pair[1] for pair in attributeLayout)
         cursor = 0
-        for semantic, numFloats in attributeLayout:
-            glVertexAttribPointer(semantic, numFloats, GL_FLOAT, False, stride, ctypes.c_void_p(cursor))
-            glEnableVertexAttribArray(semantic)
-            cursor += numFloats * 4
+        for va in attributeLayout:
+            glVertexAttribPointer(va.semantic.value, va.size.value, va.type.value,
+                                  False, self._stride, ctypes.c_void_p(cursor))
+            glEnableVertexAttribArray(va.semantic.value)
+            cursor += va.sizeInBytes()
 
         # clean up
         glBindVertexArray(0)
@@ -86,64 +124,39 @@ class MeshBase(object):
         if indexBuffer is not None:
             indexBuffer.unbind()
 
-        # drawing args are globally modifiable
-        # we would need to know the vertex stride when drawing unindexed
-        self._count = drawCount
-        self._mode = GL_TRIANGLES
-        self._indexType = GL_UNSIGNED_INT
+    @property
+    def stride(self):
+        return self._stride
 
     @property
-    def count(self):
-        return self._count
+    def vertexBuffer(self):
+        return self._vertexBuffer
 
-    @count.setter
-    def count(self, count):
-        if self._indexBuffer is None:
-            # TODO: this count can not be properly bounds-checked right now,
-            pass
-        else:
-            numIndices = self._indexBuffer.size // {GL_UNSIGNED_BYTE: 1, GL_UNSIGNED_SHORT: 2, GL_UNSIGNED_INT: 4}[self._indexType]
-            assert 0 <= count < numIndices
-        self._count = count
+    @property
+    def indexBuffer(self):
+        return self._indexBuffer
 
     @property
     def mode(self):
         return self._mode
 
-    @mode.setter
-    def mode(self, glEnum):
-        assert glEnum in (GL_POINTS, GL_LINES, GL_TRIANGLES, GL_LINE_STRIP, GL_LINE_LOOP, GL_TRIANGLE_STRIP, GL_TRIANGLE_FAN)
-        self._mode = glEnum
-
-    @property
-    def indexType(self):
-        return self._indexType
-
-    @indexType.setter
-    def indexType(self, glEnum):
-        assert glEnum in (GL_UNSIGNED_BYTE, GL_UNSIGNED_SHORT, GL_UNSIGNED_INT)
-        self._indexType = glEnum
-
     def draw(self):
         glBindVertexArray(self._handle)
         if self._indexBuffer is None:
             # TODO: this count can not be properly bounds-checked right now,
-            glDrawArrays(self.mode, 0, self._count)
+            glDrawArrays(self._mode, 0, self._count)
         else:
-            glDrawElements(self.mode, self._count, self._indexType, None)
+            glDrawElements(self._mode, self._count, self._indexType, None)
 
 
-class StaticMesh(MeshBase):
-    def __init__(self, attributeLayout, vertexData, indexDataOrDrawCount):
+class IndexedMesh(Mesh):
+    def __init__(self, attributeLayout, vertexData, indexDataOrDrawCount,
+                 mode: int = GL_TRIANGLES,
+                 indexType: int = GL_UNSIGNED_INT):
+        vbo = Buffer(GL_ARRAY_BUFFER, vertexData, GL_STATIC_DRAW)
         if not isinstance(indexDataOrDrawCount, int):
-            if isinstance(indexDataOrDrawCount, bytes):
-                count = len(indexDataOrDrawCount) // 4
-            else:
-                count = ctypes.sizeof(indexDataOrDrawCount) // 4
-            super().__init__(attributeLayout, count,
-                             Buffer(GL_ARRAY_BUFFER, vertexData, GL_STATIC_DRAW),
-                             Buffer(GL_ELEMENT_ARRAY_BUFFER, indexDataOrDrawCount, GL_STATIC_DRAW))
+            ibo = Buffer(GL_ELEMENT_ARRAY_BUFFER, indexDataOrDrawCount, GL_STATIC_DRAW)
         else:
-            count = indexDataOrDrawCount
-            super().__init__(attributeLayout, count,
-                             Buffer(GL_ARRAY_BUFFER, vertexData, GL_STATIC_DRAW))
+            ibo = None
+        super().__init__(attributeLayout, vbo, ibo, mode, indexType)
+
