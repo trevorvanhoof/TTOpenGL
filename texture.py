@@ -11,7 +11,10 @@ Note you can do:
 '+-'[cubeFace&1]
 """
 from OpenGL.GL import *
+from OpenGL.GL.EXT.texture_compression_s3tc import *
+from OpenGL.GL.EXT.texture_sRGB import *
 import enum
+import struct
 import math
 import os
 from typing import *
@@ -31,14 +34,20 @@ class Channels(enum.Enum):
     RGB = GL_RGB
     RGBA = GL_RGBA
     Depth = GL_DEPTH_COMPONENT
+
     R_I = GL_RED_INTEGER
     RG_I = GL_RG_INTEGER
     RGB_I = GL_RGB_INTEGER
     RGBA_I = GL_RGBA_INTEGER
+
     R_UI = GL_RED_INTEGER
     RG_UI = GL_RG_INTEGER
     RGB_UI = GL_RGB_INTEGER
     RGBA_UI = GL_RGBA_INTEGER
+
+    RG_SIGNED_COMPRESSED = GL_RG
+    RGB_COMPRESSED = GL_RGB
+    SRGB_COMPRESSED = GL_RGB
 
 
 _cFormat = {
@@ -67,23 +76,31 @@ _internalFormatMap = {
     (Channels.RG, Format.Uint8): GL_RG8,
     (Channels.RGB, Format.Uint8): GL_RGB8,
     (Channels.RGBA, Format.Uint8): GL_RGBA8,
+
     (Channels.R, Format.Float16): GL_R16F,
     (Channels.RG, Format.Float16): GL_RG16F,
     (Channels.RGB, Format.Float16): GL_RGB16F,
     (Channels.RGBA, Format.Float16): GL_RGBA16F,
+
     (Channels.R, Format.Float32): GL_R32F,
     (Channels.RG, Format.Float32): GL_RG32F,
     (Channels.RGB, Format.Float32): GL_RGB32F,
     (Channels.RGBA, Format.Float32): GL_RGBA32F,
     (Channels.Depth, Format.Float32): GL_DEPTH_COMPONENT,
+
     (Channels.R_I, Format.Uint8): GL_R8I,
     (Channels.RG_I, Format.Uint8): GL_RG8I,
     (Channels.RGB_I, Format.Uint8): GL_RGB8I,
     (Channels.RGBA_I, Format.Uint8): GL_RGBA8I,
+
     (Channels.R_UI, Format.Uint8): GL_R8UI,
     (Channels.RG_UI, Format.Uint8): GL_RG8UI,
     (Channels.RGB_UI, Format.Uint8): GL_RGB8UI,
     (Channels.RGBA_UI, Format.Uint8): GL_RGBA8UI,
+
+    (Channels.RG_SIGNED_COMPRESSED, Format.Uint8): GL_COMPRESSED_SIGNED_RG_RGTC2,
+    (Channels.RGB_COMPRESSED, Format.Uint8): GL_COMPRESSED_RGB_S3TC_DXT1_EXT,
+    (Channels.SRGB_COMPRESSED, Format.Uint8): GL_COMPRESSED_SRGB_S3TC_DXT1_EXT,
 }
 
 
@@ -150,27 +167,40 @@ class Texture2DFileDescription(TextureDescriptionBase):
 
     def validate(self):
         assert os.path.exists(self.filePath), self.filePath
-        # We may lift this restriction for certain file types later
-        assert self.channels in (
-            Channels.RGB, Channels.RGBA, Channels.RGB_I, Channels.RGBA_I, Channels.RGB_UI, Channels.RGBA_UI)
         assert self.dataFormat == Format.Uint8
 
     def convert(self) -> Texture2DDescription:
         self.validate()
+        from PySide6.QtCore import QSize, Qt
         from PySide6.QtGui import QImage
-        img = QImage(self.filePath)
-        n = _cChannels[self.channels]
-        if n == 3:
-            img = img.convertToFormat(QImage.Format_RGB888)
-        elif n == 4:
-            img = img.convertToFormat(QImage.Format_RGBA8888)
+        if os.path.exists(self.filePath + '.smol.bin'):
+            with open(self.filePath + '.smol.bin', 'rb') as fh:
+                w, h, n = struct.unpack('<3I', fh.read(12))
+                byts = fh.read()
+            assert n == _cChannels[self.channels]
+            assert len(byts) == w * h * n
         else:
-            raise RuntimeError()
-        # noinspection PyTypeChecker
-        bits: memoryview = img.constBits()
-        # noinspection PyTypeChecker
-        byts: bytes = bits.tobytes()
-        desc = Texture2DDescription(img.width(), img.height(), byts, self.channels, Format.Uint8,
+            img = QImage(self.filePath)
+            if img.width() > 128 or img.height() > 128:
+                img = img.scaled(QSize(128, 128), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            n = _cChannels[self.channels]
+            if n == 4:
+                img = img.convertToFormat(QImage.Format_RGBA8888)
+            else:
+                img = img.convertToFormat(QImage.Format_RGB888)
+            # noinspection PyTypeChecker
+            bits: memoryview = img.constBits()
+            # noinspection PyTypeChecker
+            byts: bytes = bits.tobytes()
+            if n == 1:
+                byts = byts[::3]
+            elif n == 2:
+                byts = b''.join(byts[i:i + 2] for i in range(len(byts) // 3))
+            w, h = img.width(), img.height()
+            with open(self.filePath + '.smol.bin', 'wb') as fh:
+                fh.write(struct.pack('<3I', w, h, n))
+                fh.write(byts)
+        desc = Texture2DDescription(w, h, byts, self.channels, Format.Uint8,
                                     self.tilingX, self.mipMaps, self.linearFiltering)
         desc.tilingY = self.tilingY
         return desc
@@ -280,7 +310,7 @@ def _numMipLevels(*size: int) -> int:
 
 def _texImage2D(target: int, internalFormat: int, width: int, height: int, channels: int, dataFormat: int,
                 data: Optional[bytes], resizable: bool):
-    if resizable:
+    if resizable or True:
         if dataFormat == GL_HALF_FLOAT:
             dataFormat = GL_FLOAT
         glTexImage2D(target, 0, internalFormat, width, height, 0, channels, dataFormat, data)
@@ -310,18 +340,16 @@ class Texture(GLObject):
         self._handle: int = glGenTextures(1)
         self.bind()
         if description.linearFiltering:
+            glTexParameteri(self._glEnum, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
             if not description.mipMaps:
-                glTexParameteri(self._glEnum, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
                 glTexParameteri(self._glEnum, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
             else:
-                glTexParameteri(self._glEnum, GL_TEXTURE_MAG_FILTER, GL_LINEAR_MIPMAP_LINEAR)
                 glTexParameteri(self._glEnum, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
         else:
+            glTexParameteri(self._glEnum, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
             if not description.mipMaps:
-                glTexParameteri(self._glEnum, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
                 glTexParameteri(self._glEnum, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
             else:
-                glTexParameteri(self._glEnum, GL_TEXTURE_MAG_FILTER, GL_NEAREST_MIPMAP_LINEAR)
                 glTexParameteri(self._glEnum, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR)
         glTexParameteri(self._glEnum, GL_TEXTURE_WRAP_S, GL_REPEAT if description.tilingX else GL_CLAMP_TO_EDGE)
         glTexParameteri(self._glEnum, GL_TEXTURE_WRAP_T, GL_REPEAT if description.tilingY else GL_CLAMP_TO_EDGE)

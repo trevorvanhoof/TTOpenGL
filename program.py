@@ -3,7 +3,7 @@ from typing import *
 import os
 import re
 from math import ceil
-from MMath.mmath import Mat44
+from MMath.mmath import Mat44, Vec2, Vec3, Vec4, Float4
 from OpenGL.GL.ARB.compute_variable_group_size import glDispatchComputeGroupSizeARB
 from OpenGL.GL import *
 from OpenGL.GL import shaders
@@ -18,6 +18,11 @@ _textByFile = {}
 _shaderWatcher = HotReloadUtil()
 
 
+# delete the shader from the cache if any of its dependent files change
+def _clearCacheItem(cache, key):
+    if key in cache:
+        del cache[key]
+
 def _readWithIncludes(absPath: str, ioPaths: List[str]):
     ioPaths.append(absPath)
 
@@ -29,12 +34,15 @@ def _readWithIncludes(absPath: str, ioPaths: List[str]):
     with open(absPath, 'rb') as fh:
         code = fh.read()
 
+    # python regex' MULTILINE flag can't deal with windows and OSX line endings
+    code = code.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
+
     # inline includes
     chunks = []
     cursor = 0
     for match in _regexIncludes.finditer(code):
         chunks.append(code[cursor:match.start()])
-        chunks.append(_readWithIncludes(os.path.join(os.path.dirname(absPath), match.group().decode('utf8')), ioPaths))
+        chunks.append(_readWithIncludes(os.path.join(os.path.dirname(absPath), match.group(1).decode('utf8')), ioPaths))
         cursor = match.end()
     chunks.append(code[cursor:])
 
@@ -45,9 +53,9 @@ def _readWithIncludes(absPath: str, ioPaths: List[str]):
     _textByFile[absPath] = code
 
     # delete the string from the cache if any of its dependent files change
-    _shaderWatcher.register(functools.partial(_textByFile.__delitem__, absPath), ioPaths)
+    _shaderWatcher.register(functools.partial(_clearCacheItem, _textByFile, absPath), ioPaths)
 
-    return chunks
+    return code
 
 
 def _compileStage(absPath: str, ioPaths: List[str]) -> int:
@@ -83,11 +91,11 @@ def _compileStage(absPath: str, ioPaths: List[str]) -> int:
                     else:
                         print(source[i])
         e.args = [f'Failed to compile shader at {absPath}. Details written to output.']
-        raise
+        # raise
+        stage = None
     _shaders[absPath] = stage
 
-    # delete the shader from the cache if any of its dependent files change
-    _shaderWatcher.register(functools.partial(_shaders.__delitem__, absPath), involvedFiles)
+    _shaderWatcher.register(functools.partial(_clearCacheItem, _shaders, absPath), involvedFiles)
     ioPaths += involvedFiles
 
     return stage
@@ -101,17 +109,19 @@ def _compileProgram(ioPaths: List[str], *paths: str) -> int:
 
     stages = [_compileStage(path, ioPaths) for path in paths]
 
-    try:
-        program = shaders.compileProgram(*stages)
-    except shaders.ShaderValidationError:
-        for stage in stages:
-            print(glGetShaderInfoLog(stage))
-        raise
+    program = None
+    if None not in stages:
+        try:
+            program = shaders.compileProgram(*stages)
+        except shaders.ShaderValidationError:
+            for stage in stages:
+                print(glGetShaderInfoLog(stage))
+            # raise
 
     _programs[paths] = program
 
     # delete the program from the cache if any of its dependent files change
-    _shaderWatcher.register(functools.partial(_programs.__delitem__, paths), ioPaths)
+    _shaderWatcher.register(functools.partial(_clearCacheItem, _programs, paths), ioPaths)
 
     return program
 
@@ -200,12 +210,20 @@ class Material(object):
             glUniform1i(loc, value)
         elif isinstance(value, float):
             glUniform1f(loc, value)
+        elif isinstance(value, Vec2):
+            glUniform2fv(loc, 1, value.m)
+        elif isinstance(value, Vec3):
+            glUniform3fv(loc, 1, value.m)
+        elif isinstance(value, (Vec4, Float4)):
+            glUniform4fv(loc, 1, value.m)
         elif isinstance(value, Mat44):
             glUniformMatrix4fv(loc, 1, False, value.m)
         else:
             raise ValueError(key, value)
 
     def use(self):
+        if self._handle is None:
+            return
         self._texture_counter = 0
         if Material._activeProgram != self._handle:
             Material._activeProgram = self._handle
@@ -233,6 +251,8 @@ class ComputeMaterial(Material):
     def dispatch(self, totalSizeOrNumWorkgroups: Tuple[int, int, int],
                  workGroupSize: Optional[Tuple[int, int, int]] = None):
         # make sure this material is used
+        if self._handle is None:
+            return
         self.use()
         if workGroupSize is None:
             x, y, z = totalSizeOrNumWorkgroups

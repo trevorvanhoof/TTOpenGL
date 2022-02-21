@@ -12,8 +12,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 """
 from .framebuffer import RenderTarget
 from .texture import Texture2DDescription, Texture3DDescription, TextureCubeDescription, \
-    Texture2D, Texture3D, TextureCube, Channels, Format
+    Texture2D, Texture3D, TextureCube, Channels, Format, Texture2DFileDescription
 from .mesh import IndexedMesh, Mesh, Buffer, VertexAttribute, loadBinaryMesh
 from .program import Material, ComputeMaterial
 from .camera_control import CameraEventFilter
-from. camera import Camera
+from. camera import Camera, ZUpCamera

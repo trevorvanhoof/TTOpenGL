@@ -27,7 +27,7 @@ class HotReloadUtil(object):
 
     def _sync(self, path):
         # keep watching  the path
-        self._watcher.addPath(path)
+        # self._watcher.addPath(path)
         # call the path-specific callbacks
         for cb, paths in self.callbacks:
             if path in paths:

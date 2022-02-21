@@ -21,6 +21,9 @@ class VertexAttribute:
         BLENDINDICES = 11
         BLENDWEIGHT = 12
         COLOR0 = 13
+        COLOR1 = 14
+        COLOR2 = 15
+        COLOR3 = 16
         # COLOR# = COLOR0 + i
 
     class Size(enum.Enum):
@@ -143,11 +146,16 @@ class Mesh(object):
     def draw(self):
         glBindVertexArray(self._handle)
         if self._indexBuffer is None:
-            # TODO: this count can not be properly bounds-checked right now,
             glDrawArrays(self._mode, 0, self._count)
         else:
             glDrawElements(self._mode, self._count, self._indexType, None)
 
+    def drawInstanced(self, count):
+        glBindVertexArray(self._handle)
+        if self._indexBuffer is None:
+            glDrawArraysInstanced(self._mode, 0, self._count, count)
+        else:
+            glDrawElementsInstanced(self._mode, self._count, self._indexType, None, count)
 
 class IndexedMesh(Mesh):
     def __init__(self, attributeLayout, vertexData, indexDataOrDrawCount,
@@ -161,7 +169,7 @@ class IndexedMesh(Mesh):
         super().__init__(attributeLayout, vbo, ibo, mode, indexType)
 
 
-def loadBinaryMesh(path):
+def loadBinaryMesh(path: str) -> Tuple[Tuple[IndexedMesh, str]]:
     """
     See maya_mesh for the file format specification.
     """
@@ -169,7 +177,7 @@ def loadBinaryMesh(path):
     def u32(fh):
         return struct.unpack('<I', fh.read(4))[0]
 
-    meshesByLayout = {}
+    meshesByLayoutAndMaterial = {}
     with open(path, 'rb') as fh:
         assert fh.read(4) == b'MSH\0', f'Unsupported file format for file "{path}".'
         fh.read(4)
@@ -189,20 +197,23 @@ def loadBinaryMesh(path):
                 attributeLayout.append(VertexAttribute(VertexAttribute.Semantic(semanticId),
                                                        VertexAttribute.Size(numFloats),
                                                        VertexAttribute.Type.Float))
-            key = tuple(key)
+            key = tuple(key) + (materialName,)
             numFloats = u32(fh)
             numInts = u32(fh)
             vboBlob = fh.read(numFloats * ctypes.sizeof(ctypes.c_float))
+            assert len(vboBlob) == numFloats * ctypes.sizeof(ctypes.c_float)
             sizeof_uint = ctypes.sizeof(ctypes.c_uint)
             iboBlob = fh.read(numInts * sizeof_uint)
-            if key not in meshesByLayout:
-                meshesByLayout[key] = attributeLayout, vboBlob, iboBlob
+            assert len(iboBlob) == numInts * sizeof_uint
+            if key not in meshesByLayoutAndMaterial:
+                meshesByLayoutAndMaterial[key] = attributeLayout, vboBlob, iboBlob, materialName
             else:
-                prevLayout, prevVboBlob, prevIboBlob = meshesByLayout[key]
+                prevLayout, prevVboBlob, prevIboBlob, prevMaterialName = meshesByLayoutAndMaterial[key]
                 indexData = (ctypes.c_uint * numInts)()
                 ctypes.memmove(ctypes.pointer(indexData), iboBlob, ctypes.sizeof(indexData))
                 offset = len(prevIboBlob) // sizeof_uint
                 for j in range(numInts):
                     indexData[j] += offset
-                meshesByLayout[key] = prevLayout, prevVboBlob + vboBlob, prevIboBlob + iboBlob
-    return tuple(IndexedMesh(*args) for args in meshesByLayout.values())
+                meshesByLayoutAndMaterial[
+                    key] = prevLayout, prevVboBlob + vboBlob, prevIboBlob + iboBlob, prevMaterialName
+    return tuple((IndexedMesh(args[0], args[1], args[2]), materialName) for args in meshesByLayoutAndMaterial.values())
