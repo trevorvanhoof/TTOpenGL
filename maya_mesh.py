@@ -167,9 +167,7 @@ def exportAllMeshes(source, target, isSkinned=False):
 
             # write material name
             try:
-                lambert = \
-                cmds.listConnections(cmds.listConnections(mesh, type='shadingEngine'), d=False, s=True, type='lambert')[
-                    0]
+                lambert = cmds.listConnections(cmds.listConnections(mesh, type='shadingEngine'), d=False, s=True, type='lambert')[0]
             except:
                 lambert = ''
             material = lambert.encode('utf8')
@@ -318,6 +316,7 @@ def exportAllMeshesAuto(skin=False):
     if not sn:
         cmds.error('Must save the scene first!')
         return
+    sn = os.path.splitext(sn)[0] + '.mesh'
     exportAllMeshes(None, sn, skin)
 
 

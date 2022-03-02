@@ -2,6 +2,9 @@ import os
 
 
 class DescriptionBase(object):
+    def __init__(self, label=''):
+        self._label = label
+
     def validate(self):
         return
 

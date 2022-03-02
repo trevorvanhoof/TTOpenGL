@@ -42,6 +42,9 @@ class VertexAttribute:
         self.size: Size = VertexAttribute.Size(size)
         self.type: Type = VertexAttribute.Type(type)
 
+    def __repr__(self):
+        return '(%s, %s, %s)' % (self.semantic, self.size, self.type)
+
     def sizeInBytes(self):
         return {VertexAttribute.Type.Float: 4}[self.type] * self.size.value
 
@@ -214,6 +217,5 @@ def loadBinaryMesh(path: str) -> Tuple[Tuple[IndexedMesh, str]]:
                 offset = len(prevIboBlob) // sizeof_uint
                 for j in range(numInts):
                     indexData[j] += offset
-                meshesByLayoutAndMaterial[
-                    key] = prevLayout, prevVboBlob + vboBlob, prevIboBlob + iboBlob, prevMaterialName
-    return tuple((IndexedMesh(args[0], args[1], args[2]), materialName) for args in meshesByLayoutAndMaterial.values())
+                meshesByLayoutAndMaterial[key] = prevLayout, prevVboBlob + vboBlob, prevIboBlob + iboBlob, prevMaterialName
+    return tuple((IndexedMesh(args[0], args[1], args[2]), args[3]) for args in meshesByLayoutAndMaterial.values())

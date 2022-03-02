@@ -23,6 +23,7 @@ from .core import DescriptionBase, GLObject
 
 class Format(enum.Enum):
     Uint8 = GL_UNSIGNED_BYTE
+    Int8 = GL_BYTE
     Float16 = GL_HALF_FLOAT
     Float32 = GL_FLOAT
     Depth = GL_FLOAT
@@ -30,77 +31,62 @@ class Format(enum.Enum):
 
 class Channels(enum.Enum):
     R = GL_RED
-    RG = GL_RG
     RGB = GL_RGB
     RGBA = GL_RGBA
     Depth = GL_DEPTH_COMPONENT
 
     R_I = GL_RED_INTEGER
-    RG_I = GL_RG_INTEGER
     RGB_I = GL_RGB_INTEGER
     RGBA_I = GL_RGBA_INTEGER
 
     R_UI = GL_RED_INTEGER
-    RG_UI = GL_RG_INTEGER
     RGB_UI = GL_RGB_INTEGER
     RGBA_UI = GL_RGBA_INTEGER
 
-    RG_SIGNED_COMPRESSED = GL_RG
-    RGB_COMPRESSED = GL_RGB
-    SRGB_COMPRESSED = GL_RGB
-
+    SRGB = 'SRGB'
 
 _cFormat = {
-    Format.Uint8: ctypes.c_byte,
+    Format.Uint8: ctypes.c_ubyte,
+    Format.Int8: ctypes.c_byte,
     Format.Float32: ctypes.c_float,
 }
 
 _cChannels = {
     Channels.R: 1,
-    Channels.RG: 2,
     Channels.RGB: 3,
+    Channels.SRGB: 3,
     Channels.RGBA: 4,
     Channels.Depth: 1,
     Channels.R_I: 1,
-    Channels.RG_I: 2,
     Channels.RGB_I: 3,
     Channels.RGBA_I: 4,
     Channels.R_UI: 1,
-    Channels.RG_UI: 2,
     Channels.RGB_UI: 3,
-    Channels.RGBA_UI: 4
+    Channels.RGBA_UI: 4,
 }
 
 _internalFormatMap = {
     (Channels.R, Format.Uint8): GL_R8,
-    (Channels.RG, Format.Uint8): GL_RG8,
     (Channels.RGB, Format.Uint8): GL_RGB8,
+    (Channels.SRGB, Format.Uint8): GL_SRGB8,
     (Channels.RGBA, Format.Uint8): GL_RGBA8,
 
     (Channels.R, Format.Float16): GL_R16F,
-    (Channels.RG, Format.Float16): GL_RG16F,
     (Channels.RGB, Format.Float16): GL_RGB16F,
     (Channels.RGBA, Format.Float16): GL_RGBA16F,
 
     (Channels.R, Format.Float32): GL_R32F,
-    (Channels.RG, Format.Float32): GL_RG32F,
     (Channels.RGB, Format.Float32): GL_RGB32F,
     (Channels.RGBA, Format.Float32): GL_RGBA32F,
     (Channels.Depth, Format.Float32): GL_DEPTH_COMPONENT,
 
     (Channels.R_I, Format.Uint8): GL_R8I,
-    (Channels.RG_I, Format.Uint8): GL_RG8I,
     (Channels.RGB_I, Format.Uint8): GL_RGB8I,
     (Channels.RGBA_I, Format.Uint8): GL_RGBA8I,
 
     (Channels.R_UI, Format.Uint8): GL_R8UI,
-    (Channels.RG_UI, Format.Uint8): GL_RG8UI,
     (Channels.RGB_UI, Format.Uint8): GL_RGB8UI,
     (Channels.RGBA_UI, Format.Uint8): GL_RGBA8UI,
-
-    (Channels.RG_SIGNED_COMPRESSED, Format.Uint8): GL_COMPRESSED_SIGNED_RG_RGTC2,
-    (Channels.RGB_COMPRESSED, Format.Uint8): GL_COMPRESSED_RGB_S3TC_DXT1_EXT,
-    (Channels.SRGB_COMPRESSED, Format.Uint8): GL_COMPRESSED_SRGB_S3TC_DXT1_EXT,
 }
 
 
@@ -117,7 +103,9 @@ class TextureDescriptionBase(DescriptionBase):
                  dataFormat: Format = Format.Uint8,
                  tiling: bool = True,
                  mipMaps: bool = False,
-                 linearFiltering: bool = True):
+                 linearFiltering: bool = True,
+                 label: str = ''):
+        super().__init__(label)
         self.channels: Channels = channels
         self.dataFormat: Format = dataFormat
         self.tilingX: bool = tiling
@@ -138,8 +126,8 @@ class Texture2DDescription(TextureDescriptionBase):
         return self.width, self.height
 
     def __init__(self, width: int, height: int, data: Union[None, bytes, List[bytes]] = None, channels=Channels.RGBA,
-                 dataFormat=Format.Uint8, tiling=True, mipMaps=False, linearFiltering=True):
-        super().__init__(channels, dataFormat, tiling, mipMaps, linearFiltering)
+                 dataFormat=Format.Uint8, tiling=True, mipMaps=False, linearFiltering=True, label=''):
+        super().__init__(channels, dataFormat, tiling, mipMaps, linearFiltering, label)
         self.width: int = width
         self.height: int = height
         # data can be a list of mip map datas, or just a mip0 data
@@ -162,7 +150,7 @@ class Texture2DFileDescription(TextureDescriptionBase):
 
     def __init__(self, filePath: str, channels: Channels = Channels.RGBA, dataFormat: Format = Format.Uint8,
                  tiling: bool = True, mipMaps: bool = False, linearFiltering: bool = True):
-        super().__init__(channels, dataFormat, tiling, mipMaps, linearFiltering)
+        super().__init__(channels, dataFormat, tiling, mipMaps, linearFiltering, filePath)
         self.filePath: str = filePath
 
     def validate(self):
@@ -171,38 +159,33 @@ class Texture2DFileDescription(TextureDescriptionBase):
 
     def convert(self) -> Texture2DDescription:
         self.validate()
-        from PySide6.QtCore import QSize, Qt
+
         from PySide6.QtGui import QImage
-        if os.path.exists(self.filePath + '.smol.bin'):
-            with open(self.filePath + '.smol.bin', 'rb') as fh:
-                w, h, n = struct.unpack('<3I', fh.read(12))
-                byts = fh.read()
-            assert n == _cChannels[self.channels]
-            assert len(byts) == w * h * n
+        img = QImage(self.filePath)
+        n = _cChannels[self.channels]
+        if n == 4:
+            img = img.convertToFormat(QImage.Format_RGBA8888)
         else:
-            img = QImage(self.filePath)
-            if img.width() > 128 or img.height() > 128:
-                img = img.scaled(QSize(128, 128), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            n = _cChannels[self.channels]
-            if n == 4:
-                img = img.convertToFormat(QImage.Format_RGBA8888)
-            else:
-                img = img.convertToFormat(QImage.Format_RGB888)
-            # noinspection PyTypeChecker
-            bits: memoryview = img.constBits()
-            # noinspection PyTypeChecker
-            byts: bytes = bits.tobytes()
-            if n == 1:
-                byts = byts[::3]
-            elif n == 2:
-                byts = b''.join(byts[i:i + 2] for i in range(len(byts) // 3))
-            w, h = img.width(), img.height()
-            with open(self.filePath + '.smol.bin', 'wb') as fh:
-                fh.write(struct.pack('<3I', w, h, n))
-                fh.write(byts)
-        desc = Texture2DDescription(w, h, byts, self.channels, Format.Uint8,
+            img = img.convertToFormat(QImage.Format_RGB888)
+
+        # noinspection PyTypeChecker
+        bits: memoryview = img.constBits()
+        # noinspection PyTypeChecker
+        byts: bytes = bits.tobytes()
+        w, h = img.width(), img.height()
+        if n == 1:
+            assert len(byts) == w * h * 3
+            byts = byts[::3]
+            assert len(byts) == w * h
+        elif n == 2:
+            assert len(byts) == w * h * 3
+            byts = b''.join(byts[i:i + 2] for i in range(len(byts) // 3))
+            assert len(byts) == w * h * 2
+
+        desc = Texture2DDescription(w, h, byts, self.channels, self.dataFormat,
                                     self.tilingX, self.mipMaps, self.linearFiltering)
         desc.tilingY = self.tilingY
+        desc._label = self._label
         return desc
 
     def __call__(self):
@@ -243,8 +226,8 @@ class TextureCubeDescription(TextureDescriptionBase):
         return self.size,
 
     def __init__(self, size: int, data: Union[None, List[bytes], List[List[bytes]]] = None, channels=Channels.RGBA,
-                 dataFormat=Format.Uint8, tiling=True, mipMaps=False, linearFiltering=True):
-        super().__init__(channels, dataFormat, tiling, mipMaps, linearFiltering)
+                 dataFormat=Format.Uint8, tiling=True, mipMaps=False, linearFiltering=True, label=''):
+        super().__init__(channels, dataFormat, tiling, mipMaps, linearFiltering, label)
         self.size: int = size
         # data can be 6 lists of mip map datas, or just 6 mip0 datas
         self.data: Union[None, List[bytes], List[List[bytes]]] = data
@@ -269,8 +252,9 @@ class Texture3DDescription(TextureDescriptionBase):
         return self.width, self.height, self.depth
 
     def __init__(self, width: int, height: int, depth: int, data: Union[None, bytes, List[bytes]] = None,
-                 channels=Channels.RGBA, dataFormat=Format.Uint8, tiling=True, mipMaps=False, linearFiltering=True):
-        super().__init__(channels, dataFormat, tiling, mipMaps, linearFiltering)
+                 channels=Channels.RGBA, dataFormat=Format.Uint8, tiling=True, mipMaps=False, linearFiltering=True,
+                 label=''):
+        super().__init__(channels, dataFormat, tiling, mipMaps, linearFiltering, label)
         self.tilingZ: bool = tiling
         self.width: int = width
         self.height: int = height
@@ -310,6 +294,8 @@ def _numMipLevels(*size: int) -> int:
 
 def _texImage2D(target: int, internalFormat: int, width: int, height: int, channels: int, dataFormat: int,
                 data: Optional[bytes], resizable: bool):
+    if isinstance(channels, str):
+        channels = {'SRGB': GL_RGB}[channels]
     if resizable or True:
         if dataFormat == GL_HALF_FLOAT:
             dataFormat = GL_FLOAT
@@ -339,6 +325,8 @@ class Texture(GLObject):
         self._glEnum: int = description.glEnum()
         self._handle: int = glGenTextures(1)
         self.bind()
+        if description._label:
+            glObjectLabel(GL_TEXTURE, self._handle, -1, description._label)
         if description.linearFiltering:
             glTexParameteri(self._glEnum, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
             if not description.mipMaps:
@@ -509,7 +497,7 @@ class TextureCube(Texture):
         return self._size[0]
 
     def _setImageAndGenerateMips(self, internalFormat: int, description: Optional[TextureDescriptionBase] = None):
-        internalFormat = _internalFormatMap[(self._channels, self._dataFormat)]
+        # internalFormat = _internalFormatMap[(self._channels, self._dataFormat)]
         for face in range(6):
             # allocate mip0
             _texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, internalFormat, self._size[0], self._size[0],
